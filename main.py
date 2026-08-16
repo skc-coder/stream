@@ -112,10 +112,25 @@ class BatchHarvester:
 
         return batch_id, batch_name
 
+    def request_with_retry(self, url, max_retries=5, initial_delay=2):
+        delay = initial_delay
+        for attempt in range(max_retries):
+            res = self.session.get(url)
+            if res.status_code == 429:
+                retry_after = res.headers.get("Retry-After")
+                sleep_time = int(retry_after) if retry_after and retry_after.isdigit() else delay
+                print(f"[Rate Limit] HTTP 429 encountered. Backing off for {sleep_time}s (Attempt {attempt+1}/{max_retries})...")
+                time.sleep(sleep_time)
+                delay *= 2
+                continue
+            res.raise_for_status()
+            return res
+        res.raise_for_status()
+        return res
+
     def fetch_batch_subjects(self, batch_id):
         url = f"{PROXY_BASE}/v3/batches/{batch_id}/details"
-        res = self.session.get(url)
-        res.raise_for_status()
+        res = self.request_with_retry(url)
         data = res.json()
         
         subjects = []
@@ -142,8 +157,7 @@ class BatchHarvester:
         page = 1
         while True:
             url = f"{PROXY_BASE}/v2/batches/{batch_id}/subject/{subject_id}/topics?page={page}"
-            res = self.session.get(url)
-            res.raise_for_status()
+            res = self.request_with_retry(url)
             data = res.json()
             items = data.get("data", [])
             if not items:
@@ -154,6 +168,7 @@ class BatchHarvester:
                     "topic_name": item.get("name", "").strip(),
                 })
             page += 1
+            time.sleep(0.3)
         return topics
 
     def fetch_topic_contents(self, batch_id, subject_id, topic_id, content_type):
@@ -161,20 +176,19 @@ class BatchHarvester:
         page = 1
         while True:
             url = f"{PROXY_BASE}/v2/batches/{batch_id}/subject/{subject_id}/contents?page={page}&contentType={content_type}&tag={topic_id}"
-            res = self.session.get(url)
-            res.raise_for_status()
+            res = self.request_with_retry(url)
             data = res.json()
             items = data.get("data", [])
             if not items:
                 break
             contents.extend(items)
             page += 1
+            time.sleep(0.3)
         return contents
 
     def fetch_video_stream_details(self, batch_id, subject_id, schedule_id):
         url = f"{BASE_SITE}/schedule-details?batchId={batch_id}&subjectId={subject_id}&scheduleId={schedule_id}&tap=video"
-        res = self.session.get(url)
-        res.raise_for_status()
+        res = self.request_with_retry(url)
         html = res.text
 
         match = re.search(r'const MEDIA_TOKEN = "([^"]+)";', html)
@@ -186,8 +200,7 @@ class BatchHarvester:
         encoded_token = urllib.parse.quote(media_token, safe="")
         
         stream_url_req = f"{BASE_SITE}/v1/videos/video-url-details?mediaToken={encoded_token}&videoContainerType=DASH"
-        stream_res = self.session.get(stream_url_req)
-        stream_res.raise_for_status()
+        stream_res = self.request_with_retry(stream_url_req)
         stream_data = stream_res.json()
 
         dash_url = stream_data.get("url")
