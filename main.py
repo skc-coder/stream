@@ -22,6 +22,14 @@ PROXY_BASE = "https://proxy.streamvideo.co.in/fetch/api.penpencil.co"
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": f"{BASE_SITE}/",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
 }
 
 STAGING_DIR = "staging"
@@ -278,17 +286,19 @@ def download_item(item, harvester, pipeline_state):
 
 # Background Uploader Process
 def start_uploader_process(rclone_target, transfers, poll_interval):
+    rclone_bin = shutil.which("rclone") or "rclone"
     cmd = [
-        "rclone", "move", READY_DIR, rclone_target,
+        rclone_bin, "move", READY_DIR, rclone_target,
         "--delete-empty-src-dirs",
         "--transfers", str(transfers)
     ]
     print(f"[Uploader Worker] Spawning background uploader loop (Target: {rclone_target})...")
     
-    # We run an inline loop inside a python subprocess or thread
     while True:
         try:
-            if os.path.exists(READY_DIR) and os.listdir(READY_DIR):
+            if not shutil.which("rclone"):
+                print(f"[Uploader Warning] 'rclone' executable not found in PATH. Install rclone or check PATH to enable cloud upload.")
+            elif os.path.exists(READY_DIR) and os.listdir(READY_DIR):
                 print(f"[Uploader] Executing rclone move...")
                 subprocess.run(cmd, check=False)
         except Exception as e:
