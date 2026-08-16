@@ -327,7 +327,16 @@ def main():
 
     print(f"[Harvester] Processing {len(course_urls)} courses from courses.txt...")
 
-    all_download_items = []
+    # Start Uploader in separate daemon thread
+    import threading
+    uploader_thread = threading.Thread(
+        target=start_uploader_process,
+        args=(config["rclone_target"], config["transfers"], config["poll_interval"]),
+        daemon=True
+    )
+    uploader_thread.start()
+
+    max_rate = config.get("max_files_per_minute", 5)
 
     for course_url in course_urls:
         batch_id, batch_name_override = harvester.parse_batch_url(course_url)
@@ -335,23 +344,30 @@ def main():
             print(f"[Warning] Could not extract batchId from URL: {course_url}")
             continue
 
-        print(f"\n--- Fetching Batch {batch_id} ---")
+        print(f"\n--- Processing Batch {batch_id} ---")
         batch_name, subjects = harvester.fetch_batch_subjects(batch_id)
         if batch_name_override:
             batch_name = batch_name_override
         
         batch_folder = sanitize_filename(batch_name)
 
+        # Sort subjects so target subjects (like English) run first if present
+        subjects.sort(key=lambda s: 0 if "english" in s["subject_name"].lower() else 1)
+
         for sub in subjects:
             subject_id = sub["subject_id"]
             subject_folder = sanitize_filename(sub["subject_name"])
-            print(f"  > Subject: {subject_folder}")
+            print(f"\n==========================================")
+            print(f"[Subject Workflow] Starting Subject: {subject_folder}")
+            print(f"==========================================")
 
+            subject_items = []
             topics = harvester.fetch_subject_topics(batch_id, subject_id)
+            
             for topic in topics:
                 topic_id = topic["topic_id"]
                 topic_folder = sanitize_filename(topic["topic_name"])
-                print(f"    > Chapter/Topic: {topic_folder}")
+                print(f"  > Indexing Chapter/Topic: {topic_folder}")
 
                 # Fetch Notes
                 notes = harvester.fetch_topic_contents(batch_id, subject_id, topic_id, "notes")
@@ -363,19 +379,17 @@ def main():
                         direct_url = note.get("url") or note.get("link")
                         if direct_url:
                             rel_path = os.path.join("stream", batch_folder, subject_folder, topic_folder, f"{note_title}.pdf")
-                            all_download_items.append({
+                            subject_items.append({
                                 "id": f"note_{note.get('_id')}",
                                 "type": "note",
                                 "url": direct_url,
                                 "rel_path": rel_path
                             })
 
-                    # Attachment validation rule
                     for att in attachments:
                         base_url = att.get("baseUrl", "")
                         key = att.get("key", "")
                         if not key or key.strip() == "":
-                            # Skip dummy root domain URLs to prevent 403
                             continue
                         
                         pdf_url = urllib.parse.urljoin(base_url, key)
@@ -384,7 +398,7 @@ def main():
                         pdf_name = f"{file_label}.pdf" if not file_label.endswith(".pdf") else file_label
                         rel_path = os.path.join("stream", batch_folder, subject_folder, topic_folder, pdf_name)
                         
-                        all_download_items.append({
+                        subject_items.append({
                             "id": f"note_{note.get('_id')}_{key}",
                             "type": "note",
                             "url": pdf_url,
@@ -399,7 +413,7 @@ def main():
                     video_name = f"{vid_title}.mp4"
                     rel_path = os.path.join("stream", batch_folder, subject_folder, topic_folder, video_name)
 
-                    all_download_items.append({
+                    subject_items.append({
                         "id": f"video_{schedule_id}",
                         "type": "video",
                         "batch_id": batch_id,
@@ -408,61 +422,46 @@ def main():
                         "rel_path": rel_path
                     })
 
-    # Save index cache
-    with open(INDEX_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(all_download_items, f, indent=2)
+            print(f"[Subject Indexed] Discovered {len(subject_items)} items in {subject_folder}. Starting downloads...")
 
-    print(f"\n[Harvester] Discovered {len(all_download_items)} total downloadable items.")
+            # Download items for current subject
+            with ThreadPoolExecutor(max_workers=config["max_workers"]) as executor:
+                futures = []
+                submission_timestamps = []
 
-    # Start Uploader in separate daemon thread
-    import threading
-    uploader_thread = threading.Thread(
-        target=start_uploader_process,
-        args=(config["rclone_target"], config["transfers"], config["poll_interval"]),
-        daemon=True
-    )
-    uploader_thread.start()
+                for item in subject_items:
+                    item_id = item["id"]
+                    if pipeline_state.is_completed(item_id):
+                        print(f"  [Skip] Already completed: {item['rel_path']}")
+                        continue
 
-    # Parallel Download Producer with Per-Minute Rate Limiter
-    max_rate = config.get("max_files_per_minute", 5)
-    print(f"[Downloader Pool] Starting parallel download with {config['max_workers']} workers (Rate limit: {max_rate} files/min)...")
-    
-    with ThreadPoolExecutor(max_workers=config["max_workers"]) as executor:
-        futures = []
-        submission_timestamps = []
+                    if max_rate > 0:
+                        now = time.time()
+                        submission_timestamps = [t for t in submission_timestamps if now - t < 60]
+                        if len(submission_timestamps) >= max_rate:
+                            sleep_needed = 60 - (now - submission_timestamps[0]) + 0.5
+                            if sleep_needed > 0:
+                                print(f"  [Rate Limiter] Throttling per-minute limit for {sleep_needed:.1f}s...")
+                                time.sleep(sleep_needed)
+                            submission_timestamps = [t for t in submission_timestamps if time.time() - t < 60]
 
-        for item in all_download_items:
-            item_id = item["id"]
-            if pipeline_state.is_completed(item_id):
-                print(f"[Skip] Already completed: {item['rel_path']}")
-                continue
+                        submission_timestamps.append(time.time())
 
-            if max_rate > 0:
-                now = time.time()
-                # Remove timestamps older than 60 seconds
-                submission_timestamps = [t for t in submission_timestamps if now - t < 60]
-                if len(submission_timestamps) >= max_rate:
-                    sleep_needed = 60 - (now - submission_timestamps[0]) + 0.5
-                    if sleep_needed > 0:
-                        print(f"[Rate Limiter] Reached max {max_rate} downloads/min. Throttling for {sleep_needed:.1f}s...")
-                        time.sleep(sleep_needed)
-                    submission_timestamps = [t for t in submission_timestamps if time.time() - t < 60]
+                    futures.append(executor.submit(download_item, item, harvester, pipeline_state))
 
-                submission_timestamps.append(time.time())
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"  [Worker Exception] {e}")
 
-            futures.append(executor.submit(download_item, item, harvester, pipeline_state))
+            print(f"[Subject Completed] {subject_folder} processing finished.\n")
 
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"[Worker Exception] {e}")
-
-    print("\n[Pipeline Complete] All downloads finished! Waiting for uploader worker to flush remaining files...")
-    # Final flush check
+    print("\n[Pipeline Complete] All subjects finished! Waiting for uploader worker to flush remaining files...")
     time.sleep(config["poll_interval"] + 2)
+    rclone_bin = shutil.which("rclone") or "rclone"
     cmd = [
-        "rclone", "move", READY_DIR, config["rclone_target"],
+        rclone_bin, "move", READY_DIR, config["rclone_target"],
         "--delete-empty-src-dirs",
         "--transfers", str(config["transfers"])
     ]
