@@ -302,11 +302,11 @@ def download_item(item, harvester, pipeline_state):
                 cmd.extend(["--add-header", f"Cookie:{cookie_str}"])
             cmd.extend(["--add-header", f"User-Agent:{DEFAULT_HEADERS['User-Agent']}"])
             cmd.extend(["--add-header", f"Referer:{BASE_SITE}/"])
-            cmd.extend(["-o", staging_file, "--no-warning", "--quiet"])
+            cmd.extend(["-o", staging_file, "--no-warning"])
 
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+            proc = subprocess.run(cmd)
             if proc.returncode != 0:
-                print(f"[yt-dlp Error] {proc.stderr}")
+                print(f"[yt-dlp Error] Download process exited with code {proc.returncode}")
                 return
 
         # Atomic move from staging to ready_for_upload
@@ -328,7 +328,8 @@ def start_uploader_process(rclone_target, transfers, poll_interval):
     cmd = [
         rclone_bin, "move", READY_DIR, rclone_target,
         "--delete-empty-src-dirs",
-        "--transfers", str(transfers)
+        "--transfers", str(transfers),
+        "-P", "--stats", "5s"
     ]
     print(f"[Uploader Worker] Spawning background uploader loop (Target: {rclone_target})...")
     
@@ -519,7 +520,8 @@ def main():
     cmd = [
         rclone_bin, "move", READY_DIR, config["rclone_target"],
         "--delete-empty-src-dirs",
-        "--transfers", str(config["transfers"])
+        "--transfers", str(config["transfers"]),
+        "-P", "--stats", "5s"
     ]
     subprocess.run(cmd, check=False)
     print("[Done] Real-time upload fully synchronized.")
