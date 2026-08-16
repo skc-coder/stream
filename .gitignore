@@ -1,6 +1,5 @@
 staging/
 ready_for_upload/
-.pipeline_state.json
 .index_cache.json
 __pycache__/
 *.pyc
