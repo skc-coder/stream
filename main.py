@@ -215,6 +215,7 @@ class BatchHarvester:
 
     def fetch_video_stream_details(self, batch_id, subject_id, schedule_id):
         url = f"{BASE_SITE}/schedule-details?batchId={batch_id}&subjectId={subject_id}&scheduleId={schedule_id}&type=video&tap=video"
+        time.sleep(1.0)  # Gentle delay to prevent server 403 burst protection
         try:
             res = self.request_with_retry(url)
         except Exception as e:
