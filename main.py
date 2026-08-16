@@ -141,10 +141,12 @@ class BatchHarvester:
 
         for attempt in range(max_retries):
             res = self.session.get(url, headers=headers)
-            if res.status_code == 429:
+            if res.status_code in (429, 403):
+                if res.status_code == 403 and attempt == max_retries - 1:
+                    print(f"[Auth/Access Warning] HTTP 403 Forbidden for {url}. Your session cookie in config.ini may be expired or rate-limited.")
                 retry_after = res.headers.get("Retry-After")
                 sleep_time = int(retry_after) if retry_after and retry_after.isdigit() else delay
-                print(f"[Rate Limit] HTTP 429 encountered. Backing off for {sleep_time}s (Attempt {attempt+1}/{max_retries})...")
+                print(f"[Rate/Access Limit] HTTP {res.status_code} for {url}. Backing off for {sleep_time}s (Attempt {attempt+1}/{max_retries})...")
                 time.sleep(sleep_time)
                 delay *= 2
                 continue
@@ -213,7 +215,11 @@ class BatchHarvester:
 
     def fetch_video_stream_details(self, batch_id, subject_id, schedule_id):
         url = f"{BASE_SITE}/schedule-details?batchId={batch_id}&subjectId={subject_id}&scheduleId={schedule_id}&type=video&tap=video"
-        res = self.request_with_retry(url)
+        try:
+            res = self.request_with_retry(url)
+        except Exception as e:
+            print(f"[Harvester Error] Failed to fetch schedule-details for scheduleId {schedule_id}: {e}")
+            return None, []
         html = res.text
 
         match = re.search(r'const MEDIA_TOKEN = "([^"]+)";', html)
@@ -225,8 +231,12 @@ class BatchHarvester:
         encoded_token = urllib.parse.quote(media_token, safe="")
         
         stream_url_req = f"{BASE_SITE}/v1/videos/video-url-details?mediaToken={encoded_token}&videoContainerType=DASH"
-        stream_res = self.request_with_retry(stream_url_req)
-        stream_json = stream_res.json()
+        try:
+            stream_res = self.request_with_retry(stream_url_req)
+            stream_json = stream_res.json()
+        except Exception as e:
+            print(f"[Harvester Error] Failed to fetch video-url-details for scheduleId {schedule_id}: {e}")
+            return None, []
 
         # Support both top-level and nested data dict format
         data_obj = stream_json.get("data", stream_json) if isinstance(stream_json, dict) else {}
