@@ -296,7 +296,7 @@ def download_item(item, harvester, pipeline_state):
                 print(f"[Error] Stream details missing for {item['rel_path']}")
                 return
 
-            cmd = ["yt-dlp", dash_url]
+            cmd = ["yt-dlp", dash_url, "--allow-unplayable-formats"]
             cookie_str = "; ".join([f"{k}={v}" for k, v in harvester.session.cookies.items()])
             if cookie_str:
                 cmd.extend(["--add-header", f"Cookie:{cookie_str}"])
