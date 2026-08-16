@@ -301,9 +301,6 @@ def download_item(item, harvester, pipeline_state):
                 cmd.extend(["--add-header", f"Cookie:{cookie_str}"])
             cmd.extend(["--add-header", f"User-Agent:{DEFAULT_HEADERS['User-Agent']}"])
             cmd.extend(["--add-header", f"Referer:{BASE_SITE}/"])
-            
-            for key in keys:
-                cmd.extend(["--key", key])
             cmd.extend(["-o", staging_file, "--no-warning", "--quiet"])
 
             proc = subprocess.run(cmd, capture_output=True, text=True)
