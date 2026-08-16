@@ -217,10 +217,19 @@ class BatchHarvester:
         
         stream_url_req = f"{BASE_SITE}/v1/videos/video-url-details?mediaToken={encoded_token}&videoContainerType=DASH"
         stream_res = self.request_with_retry(stream_url_req)
-        stream_data = stream_res.json()
+        stream_json = stream_res.json()
 
-        dash_url = stream_data.get("url")
-        keys = stream_data.get("keys", []) # ["KEY_ID:KEY"]
+        # Support both top-level and nested data dict format
+        data_obj = stream_json.get("data", stream_json) if isinstance(stream_json, dict) else {}
+        dash_url = data_obj.get("url") or stream_json.get("url")
+        
+        raw_keys = stream_json.get("keys") or data_obj.get("keys") or data_obj.get("clearKeys") or []
+        keys = []
+        if isinstance(raw_keys, list):
+            keys = raw_keys
+        elif isinstance(raw_keys, dict):
+            keys = [f"{k}:{v}" for k, v in raw_keys.items()]
+            
         return dash_url, keys
 
 # Downloader Worker
@@ -268,6 +277,12 @@ def download_item(item, harvester, pipeline_state):
                 return
 
             cmd = ["yt-dlp", dash_url]
+            cookie_str = "; ".join([f"{k}={v}" for k, v in harvester.session.cookies.items()])
+            if cookie_str:
+                cmd.extend(["--add-header", f"Cookie:{cookie_str}"])
+            cmd.extend(["--add-header", f"User-Agent:{DEFAULT_HEADERS['User-Agent']}"])
+            cmd.extend(["--add-header", f"Referer:{BASE_SITE}/"])
+            
             for key in keys:
                 cmd.extend(["--key", key])
             cmd.extend(["-o", staging_file, "--no-warning", "--quiet"])
