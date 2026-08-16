@@ -124,8 +124,14 @@ class BatchHarvester:
 
     def request_with_retry(self, url, max_retries=5, initial_delay=2):
         delay = initial_delay
+        # Ensure session cookies are sent in explicit header string as well
+        headers = dict(self.session.headers)
+        cookie_str = "; ".join([f"{k}={v}" for k, v in self.session.cookies.items()])
+        if cookie_str:
+            headers["Cookie"] = cookie_str
+
         for attempt in range(max_retries):
-            res = self.session.get(url)
+            res = self.session.get(url, headers=headers)
             if res.status_code == 429:
                 retry_after = res.headers.get("Retry-After")
                 sleep_time = int(retry_after) if retry_after and retry_after.isdigit() else delay
