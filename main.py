@@ -124,11 +124,20 @@ class BatchHarvester:
 
     def request_with_retry(self, url, max_retries=5, initial_delay=2):
         delay = initial_delay
-        # Ensure session cookies are sent in explicit header string as well
         headers = dict(self.session.headers)
         cookie_str = "; ".join([f"{k}={v}" for k, v in self.session.cookies.items()])
         if cookie_str:
             headers["Cookie"] = cookie_str
+
+        # Adjust fetch mode/dest dynamically for JSON API vs Document
+        if "/api." in url or "/v1/" in url or "/v2/" in url or "/v3/" in url:
+            headers["Sec-Fetch-Dest"] = "empty"
+            headers["Sec-Fetch-Mode"] = "cors"
+            headers["Accept"] = "application/json, text/plain, */*"
+        else:
+            headers["Sec-Fetch-Dest"] = "document"
+            headers["Sec-Fetch-Mode"] = "navigate"
+            headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
         for attempt in range(max_retries):
             res = self.session.get(url, headers=headers)
@@ -203,7 +212,7 @@ class BatchHarvester:
         return contents
 
     def fetch_video_stream_details(self, batch_id, subject_id, schedule_id):
-        url = f"{BASE_SITE}/schedule-details?batchId={batch_id}&subjectId={subject_id}&scheduleId={schedule_id}&tap=video"
+        url = f"{BASE_SITE}/schedule-details?batchId={batch_id}&subjectId={subject_id}&scheduleId={schedule_id}&type=video&tap=video"
         res = self.request_with_retry(url)
         html = res.text
 
