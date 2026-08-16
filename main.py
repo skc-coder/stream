@@ -465,7 +465,8 @@ def main():
             # Download items for current subject
             with ThreadPoolExecutor(max_workers=config["max_workers"]) as executor:
                 futures = []
-                submission_timestamps = []
+                video_timestamps = []
+                file_timestamps = []
 
                 for item in subject_items:
                     item_id = item["id"]
@@ -473,17 +474,34 @@ def main():
                         print(f"  [Skip] Already completed: {item['rel_path']}")
                         continue
 
-                    if max_rate > 0:
-                        now = time.time()
-                        submission_timestamps = [t for t in submission_timestamps if now - t < 60]
-                        if len(submission_timestamps) >= max_rate:
-                            sleep_needed = 60 - (now - submission_timestamps[0]) + 0.5
-                            if sleep_needed > 0:
-                                print(f"  [Rate Limiter] Throttling per-minute limit for {sleep_needed:.1f}s...")
-                                time.sleep(sleep_needed)
-                            submission_timestamps = [t for t in submission_timestamps if time.time() - t < 60]
+                    ready_file = os.path.join(READY_DIR, item["rel_path"])
+                    if os.path.exists(ready_file):
+                        pipeline_state.mark_completed(item_id)
+                        print(f"  [Skip] Already present in ready_for_upload: {item['rel_path']}")
+                        continue
 
-                        submission_timestamps.append(time.time())
+                    item_type = item["type"]
+                    now = time.time()
+
+                    if item_type == "video":
+                        video_timestamps = [t for t in video_timestamps if now - t < 60]
+                        if len(video_timestamps) >= 4:
+                            sleep_needed = 60 - (now - video_timestamps[0]) + 0.5
+                            if sleep_needed > 0:
+                                print(f"  [Rate Limiter] Throttling video limit (max 4/min) for {sleep_needed:.1f}s...")
+                                time.sleep(sleep_needed)
+                            video_timestamps = [t for t in video_timestamps if time.time() - t < 60]
+                        video_timestamps.append(time.time())
+
+                    else:  # note / PDF file
+                        file_timestamps = [t for t in file_timestamps if now - t < 60]
+                        if len(file_timestamps) >= 5:
+                            sleep_needed = 60 - (now - file_timestamps[0]) + 0.5
+                            if sleep_needed > 0:
+                                print(f"  [Rate Limiter] Throttling file limit (max 5/min) for {sleep_needed:.1f}s...")
+                                time.sleep(sleep_needed)
+                            file_timestamps = [t for t in file_timestamps if time.time() - t < 60]
+                        file_timestamps.append(time.time())
 
                     futures.append(executor.submit(download_item, item, harvester, pipeline_state))
 
