@@ -41,6 +41,7 @@ def load_config():
     transfers = config.getint("rclone", "transfers", fallback=6)
     poll_interval = config.getint("rclone", "poll_interval_seconds", fallback=10)
     max_workers = config.getint("concurrency", "max_download_workers", fallback=3)
+    max_files_per_minute = config.getint("concurrency", "max_files_per_minute", fallback=5)
 
     return {
         "session": session,
@@ -49,6 +50,7 @@ def load_config():
         "transfers": transfers,
         "poll_interval": poll_interval,
         "max_workers": max_workers,
+        "max_files_per_minute": max_files_per_minute,
     }
 
 def sanitize_filename(name):
@@ -411,13 +413,35 @@ def main():
     )
     uploader_thread.start()
 
-    # Parallel Download Producer
-    print(f"[Downloader Pool] Starting parallel download with {config['max_workers']} workers...")
+    # Parallel Download Producer with Per-Minute Rate Limiter
+    max_rate = config.get("max_files_per_minute", 5)
+    print(f"[Downloader Pool] Starting parallel download with {config['max_workers']} workers (Rate limit: {max_rate} files/min)...")
+    
     with ThreadPoolExecutor(max_workers=config["max_workers"]) as executor:
-        futures = [
-            executor.submit(download_item, item, harvester, pipeline_state)
-            for item in all_download_items
-        ]
+        futures = []
+        submission_timestamps = []
+
+        for item in all_download_items:
+            item_id = item["id"]
+            if pipeline_state.is_completed(item_id):
+                print(f"[Skip] Already completed: {item['rel_path']}")
+                continue
+
+            if max_rate > 0:
+                now = time.time()
+                # Remove timestamps older than 60 seconds
+                submission_timestamps = [t for t in submission_timestamps if now - t < 60]
+                if len(submission_timestamps) >= max_rate:
+                    sleep_needed = 60 - (now - submission_timestamps[0]) + 0.5
+                    if sleep_needed > 0:
+                        print(f"[Rate Limiter] Reached max {max_rate} downloads/min. Throttling for {sleep_needed:.1f}s...")
+                        time.sleep(sleep_needed)
+                    submission_timestamps = [t for t in submission_timestamps if time.time() - t < 60]
+
+                submission_timestamps.append(time.time())
+
+            futures.append(executor.submit(download_item, item, harvester, pipeline_state))
+
         for future in as_completed(futures):
             try:
                 future.result()
