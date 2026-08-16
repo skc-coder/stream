@@ -332,6 +332,19 @@ def main():
                 notes = harvester.fetch_topic_contents(batch_id, subject_id, topic_id, "notes")
                 for note in notes:
                     attachments = note.get("homeworkIds", []) or note.get("attachments", [])
+                    note_title = sanitize_filename(note.get("topic") or note.get("name") or "Note")
+                    
+                    if not attachments and ("url" in note or "link" in note):
+                        direct_url = note.get("url") or note.get("link")
+                        if direct_url:
+                            rel_path = os.path.join("stream", batch_folder, subject_folder, topic_folder, f"{note_title}.pdf")
+                            all_download_items.append({
+                                "id": f"note_{note.get('_id')}",
+                                "type": "note",
+                                "url": direct_url,
+                                "rel_path": rel_path
+                            })
+
                     # Attachment validation rule
                     for att in attachments:
                         base_url = att.get("baseUrl", "")
@@ -341,8 +354,9 @@ def main():
                             continue
                         
                         pdf_url = urllib.parse.urljoin(base_url, key)
-                        note_title = sanitize_filename(note.get("topic", "Note"))
-                        pdf_name = f"{note_title}.pdf"
+                        att_name = att.get("name", "")
+                        file_label = sanitize_filename(att_name) if att_name else note_title
+                        pdf_name = f"{file_label}.pdf" if not file_label.endswith(".pdf") else file_label
                         rel_path = os.path.join("stream", batch_folder, subject_folder, topic_folder, pdf_name)
                         
                         all_download_items.append({
